@@ -75,8 +75,7 @@ No Python needed — download the binary for your platform from the [Releases pa
 | Platform | File |
 |----------|------|
 | 🐧 Linux (x86_64) | `mi-unlock-linux-x86_64` |
-| 🍎 macOS (Apple Silicon) | `mi-unlock-macos-arm64` |
-| 🍎 macOS (Intel) | `mi-unlock-macos-x86_64` |
+| 🍎 macOS (Apple Silicon / Intel via Rosetta) | `mi-unlock-macos-arm64` |
 | 🪟 Windows (x86_64) | `mi-unlock-windows-x86_64.exe` |
 | 🤖 Android / Termux | `mi-unlock-termux-android.whl` |
 
