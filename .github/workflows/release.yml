@@ -112,6 +112,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -119,51 +121,30 @@ jobs:
           path: dist/
           merge-multiple: true
 
-      - name: List artifacts
-        run: ls -lh dist/
+      - name: Build release body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          PREV_TAG="$(git tag --sort=-creatordate | grep -v "^${TAG}$" | head -n 1 || true)"
+          if [ -n "$PREV_TAG" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$TAG" \
+              -f previous_tag_name="$PREV_TAG" \
+              --jq .body > generated-notes.md
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$TAG" \
+              --jq .body > generated-notes.md
+          fi
+          sed "s/{{VERSION}}/${TAG}/g" .github/release-template.md > release-body.md
+          cat generated-notes.md >> release-body.md
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           name: "mi-unlock ${{ github.ref_name }}"
-          body: |
-            ## mi-unlock ${{ github.ref_name }}
-
-            Xiaomi bootloader unlock request tool — AQLR method, NTP-synced to midnight Beijing time.
-
-            ---
-
-            ### Download
-
-            | Platform | File |
-            |----------|------|
-            | 🐧 Linux (x86_64) | `mi-unlock-linux-x86_64` |
-            | 🍎 macOS (Apple Silicon / Intel via Rosetta) | `mi-unlock-macos-arm64` |
-            | 🪟 Windows (x86_64) | `mi-unlock-windows-x86_64.exe` |
-            | 🤖 Android / Termux | `mi-unlock-termux-android.whl` |
-
-            ---
-
-            ### Usage
-
-            **Linux / macOS**
-            ```bash
-            chmod +x mi-unlock-*
-            ./mi-unlock-linux-x86_64 --help
-            ```
-
-            **Windows**
-            ```
-            mi-unlock-windows-x86_64.exe --help
-            ```
-
-            **Android / Termux**
-            ```bash
-            pkg install python
-            pip install mi-unlock-termux-android.whl
-            mi-unlock --help
-            ```
-
+          body_path: release-body.md
           draft: false
           prerelease: ${{ contains(github.ref_name, 'dev') || contains(github.ref_name, 'rc') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
           files: |
