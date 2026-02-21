@@ -123,22 +123,25 @@ jobs:
 
       - name: Build release body
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
           PREV_TAG="$(git tag --sort=-creatordate | grep -v "^${TAG}$" | head -n 1 || true)"
-          if [ -n "$PREV_TAG" ]; then
-            gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-              -f tag_name="$TAG" \
-              -f previous_tag_name="$PREV_TAG" \
-              --jq .body > generated-notes.md
-          else
-            gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-              -f tag_name="$TAG" \
-              --jq .body > generated-notes.md
-          fi
+
           sed "s/{{VERSION}}/${TAG}/g" .github/release-template.md > release-body.md
-          cat generated-notes.md >> release-body.md
+
+          if [ -n "$PREV_TAG" ]; then
+            echo "Changes since \`${PREV_TAG}\`:" >> release-body.md
+            git log "${PREV_TAG}..${TAG}" \
+              --pretty=format:"- %s ([%h](https://github.com/${GITHUB_REPOSITORY}/commit/%H))" \
+              --no-merges >> release-body.md
+            echo "" >> release-body.md
+            echo "" >> release-body.md
+            echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${TAG}" >> release-body.md
+          else
+            git log "${TAG}" \
+              --pretty=format:"- %s ([%h](https://github.com/${GITHUB_REPOSITORY}/commit/%H))" \
+              --no-merges >> release-body.md
+          fi
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
