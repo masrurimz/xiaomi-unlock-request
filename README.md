@@ -13,41 +13,70 @@ uv sync
 
 ## Get Tokens
 
-You need 2 session tokens from 2 different browsers, both logged into the **same Mi Account** on [Mi Community Global](https://c.mi.com/global):
+You need 2 session tokens from 2 different browsers, both logged into the **same Mi Account** on [Mi Community Global](https://c.mi.com/global).
+
+Run the interactive setup wizard:
+
+```bash
+uv run mi-unlock setup
+```
+
+Or manually create `tokens.json`:
+
+```json
+{
+  "firefox": "<new_bbs_serviceToken from Firefox cookies>",
+  "chrome": "<popRunToken from Chrome cookies>"
+}
+```
 
 ### Token 1: Firefox (`new_bbs_serviceToken`)
-1. Open Firefox → https://c.mi.com/global
-2. Login with your Mi Account
-3. Press **F12** → **Storage** → **Cookies** → `c.mi.com`
-4. Find `new_bbs_serviceToken` → copy the **Value**
+1. Open Firefox → https://c.mi.com/global → Login
+2. Press **F12** → **Storage** → **Cookies** → `c.mi.com`
+3. Find `new_bbs_serviceToken` → copy the **Value**
 
 ### Token 2: Chrome (`popRunToken`)
-1. Open Chrome → https://c.mi.com/global
-2. Login with the **same** Mi Account
-3. Press **F12** → **Application** → **Cookies** → `https://c.mi.com`
-4. Find `popRunToken` → copy the **Value**
-
-### Save tokens
-Create `token.txt` with 2 lines:
-```
-<firefox new_bbs_serviceToken value>
-<chrome popRunToken value>
-```
+1. Open Chrome → https://c.mi.com/global → Login (same account)
+2. Press **F12** → **Application** → **Cookies** → `https://c.mi.com`
+3. Find `popRunToken` → copy the **Value**
 
 ⚠️ Tokens expire — get fresh ones right before running the script each night.
 
-## Run
+## Commands
 
+### Check eligibility
 ```bash
-uv run python unlock.py
+uv run mi-unlock status
+```
+
+### Run the unlock request
+```bash
+uv run mi-unlock run
 ```
 
 The script will:
 1. Check your account eligibility
 2. Sync time via NTP servers
-3. Wait until midnight Beijing time
+3. Count down to midnight Beijing time
 4. Fire 4 parallel requests at offsets: 1400, 900, 400, 100ms before midnight
 5. Retry in a tight loop for 30 seconds after midnight
+
+### Options for `run`
+```bash
+uv run mi-unlock run --dry-run    # Test everything except the actual HTTP POST
+uv run mi-unlock run --plain      # Line-based output (no Rich Live display)
+uv run mi-unlock run --token-file /path/to/tokens.json
+```
+
+## Development
+
+```bash
+# Run tests
+uv run pytest
+
+# Run with coverage
+uv run pytest --cov=src/xiaomi_unlock
+```
 
 ## After Approval
 
