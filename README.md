@@ -68,6 +68,33 @@ uv run mi-unlock run --plain      # Line-based output (no Rich Live display)
 uv run mi-unlock run --token-file /path/to/tokens.json
 ```
 
+## Download (Pre-built Binaries)
+
+No Python needed — download the binary for your platform from the [Releases page](https://github.com/masrurimz/xiaomi-unlock-request/releases/latest).
+
+| Platform | File |
+|----------|------|
+| 🐧 Linux (x86_64) | `mi-unlock-linux-x86_64` |
+| 🍎 macOS (Apple Silicon) | `mi-unlock-macos-arm64` |
+| 🍎 macOS (Intel) | `mi-unlock-macos-x86_64` |
+| 🪟 Windows (x86_64) | `mi-unlock-windows-x86_64.exe` |
+| 🤖 Android / Termux | `mi-unlock-termux-android.whl` |
+
+**Linux / macOS:**
+```bash
+chmod +x mi-unlock-*
+./mi-unlock-linux-x86_64 --help
+```
+
+**Windows:** double-click or run `mi-unlock-windows-x86_64.exe --help` in PowerShell.
+
+**Android / Termux:**
+```bash
+pkg install python
+pip install mi-unlock-termux-android.whl
+mi-unlock --help
+```
+
 ## Development
 
 ```bash

@@ -32,6 +32,28 @@ bd sync               # Sync with git
 6. **Verify** - All changes committed AND pushed
 7. **Hand off** - Provide context for next session
 
+## Releasing (CalVer)
+
+This project uses **CalVer** (`YYYY.MM.DD` or `YYYY.MM.DD.N` for multiple releases per day).
+
+Pushing a tag triggers GitHub Actions to build cross-platform binaries and create a GitHub Release automatically.
+
+```bash
+# First release of the day
+git tag 2026.02.22
+git push origin 2026.02.22
+
+# Second release same day
+git tag 2026.02.22.1
+git push origin 2026.02.22.1
+```
+
+Pre-release tags (contain `dev`, `rc`, `alpha`, `beta`) are marked as pre-release on GitHub:
+```bash
+git tag 2026.02.22-beta
+git push origin 2026.02.22-beta
+```
+
 **CRITICAL RULES:**
 - Work is NOT complete until `git push` succeeds
 - NEVER stop before pushing - that leaves work stranded locally
