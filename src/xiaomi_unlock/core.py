@@ -368,11 +368,14 @@ async def run_workers(
     """
     firefox, chrome = tokens
     token_list = [firefox, chrome, firefox, chrome]
+    # Each token gets one device_id, reused across all workers using that token
+    # (matches OG: one device_id per script instance / token)
+    dev_ids = [gen_device_id(), gen_device_id(), gen_device_id(), gen_device_id()]
     stop = asyncio.Event()
 
     tasks = [
-        run_worker(i + 1, tok, off, clock, stop, dry_run, on_attempt)
-        for i, (tok, off) in enumerate(zip(token_list, offsets))
+        run_worker(i + 1, tok, off, clock, stop, dry_run, on_attempt, dev)
+        for i, (tok, off, dev) in enumerate(zip(token_list, offsets, dev_ids))
     ]
     results = await asyncio.gather(*tasks)
     return list(results)
