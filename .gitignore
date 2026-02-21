@@ -1,3 +1,17 @@
 __pycache__/
 .venv/
 token.txt
+tokens.json
+*.egg-info/
+dist/
+.DS_Store
+logs/
+*.log
+.beads/*.db
+.beads/*.db-shm
+.beads/*.db-wal
+.beads/*.sock
+.beads/*.pid
+.beads/*.lock
+.beads/daemon.log
+.beads/last-touched
