@@ -41,9 +41,6 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-groups
 
-      - name: Install PyInstaller
-        run: uv run pip install pyinstaller
-
       - name: Build binary (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
