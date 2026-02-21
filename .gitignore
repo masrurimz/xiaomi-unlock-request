@@ -1,3 +1,10 @@
 __pycache__/
 .venv/
 token.txt
+tokens.json
+*.egg-info/
+dist/
+.DS_Store
+logs/
+*.log
+.beads/
