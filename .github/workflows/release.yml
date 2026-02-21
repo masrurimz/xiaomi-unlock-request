@@ -1,0 +1,180 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: mi-unlock-linux-x86_64
+            binary: mi-unlock
+          - os: macos-latest
+            artifact: mi-unlock-macos-arm64
+            binary: mi-unlock
+          - os: macos-13
+            artifact: mi-unlock-macos-x86_64
+            binary: mi-unlock
+          - os: windows-latest
+            artifact: mi-unlock-windows-x86_64.exe
+            binary: mi-unlock.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Install PyInstaller
+        run: uv run pip install pyinstaller
+
+      - name: Build binary (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          uv run pyinstaller \
+            --onefile \
+            --name mi-unlock \
+            --collect-all xiaomi_unlock \
+            src/xiaomi_unlock/cli.py
+
+      - name: Build binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          uv run pyinstaller `
+            --onefile `
+            --name mi-unlock `
+            --collect-all xiaomi_unlock `
+            src/xiaomi_unlock/cli.py
+
+      - name: Rename artifact (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: mv dist/mi-unlock dist/${{ matrix.artifact }}
+
+      - name: Rename artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Move-Item dist\mi-unlock.exe dist\${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          if-no-files-found: error
+
+  # Android/Termux: pure-Python wheel (no native binary possible on ARM)
+  build-termux:
+    name: Build (Termux/Android wheel)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Build wheel
+        run: uv build --wheel
+
+      - name: Rename wheel artifact
+        run: |
+          WHEEL=$(ls dist/*.whl)
+          mv "$WHEEL" dist/mi-unlock-termux-android.whl
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mi-unlock-termux-android.whl
+          path: dist/mi-unlock-termux-android.whl
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: [build, build-termux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh dist/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "mi-unlock ${{ github.ref_name }}"
+          body: |
+            ## mi-unlock ${{ github.ref_name }}
+
+            Xiaomi bootloader unlock request tool — AQLR method, NTP-synced to midnight Beijing time.
+
+            ---
+
+            ### Download
+
+            | Platform | File |
+            |----------|------|
+            | 🐧 Linux (x86_64) | `mi-unlock-linux-x86_64` |
+            | 🍎 macOS (Apple Silicon) | `mi-unlock-macos-arm64` |
+            | 🍎 macOS (Intel) | `mi-unlock-macos-x86_64` |
+            | 🪟 Windows (x86_64) | `mi-unlock-windows-x86_64.exe` |
+            | 🤖 Android / Termux | `mi-unlock-termux-android.whl` |
+
+            ---
+
+            ### Usage
+
+            **Linux / macOS**
+            ```bash
+            chmod +x mi-unlock-*
+            ./mi-unlock-linux-x86_64 --help
+            ```
+
+            **Windows**
+            ```
+            mi-unlock-windows-x86_64.exe --help
+            ```
+
+            **Android / Termux**
+            ```bash
+            pkg install python
+            pip install mi-unlock-termux-android.whl
+            mi-unlock --help
+            ```
+
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            dist/mi-unlock-linux-x86_64
+            dist/mi-unlock-macos-arm64
+            dist/mi-unlock-macos-x86_64
+            dist/mi-unlock-windows-x86_64.exe
+            dist/mi-unlock-termux-android.whl
