@@ -20,8 +20,8 @@ LEGACY_TOKEN_FILE = Path("token.txt")
 
 
 class Tokens(NamedTuple):
-    firefox: str   # new_bbs_serviceToken
-    chrome: str    # popRunToken
+    firefox: str  # new_bbs_serviceToken
+    chrome: str  # popRunToken
 
 
 class TokenError(Exception):
@@ -49,24 +49,18 @@ def load_tokens(token_file: Path | None = None) -> Tokens:
         except (json.JSONDecodeError, OSError) as e:
             raise TokenError(f"Cannot read {path}: {e}") from e
         if not validate_token(firefox) or not validate_token(chrome):
-            raise TokenError(
-                f"Tokens in {path} look invalid. Run `mi-unlock setup` to reconfigure."
-            )
+            raise TokenError(f"Tokens in {path} look invalid. Run `mi-unlock setup` to reconfigure.")
         return Tokens(firefox=firefox, chrome=chrome)
 
     # Legacy format: token.txt (2 lines)
     legacy = path if path.suffix == ".txt" else (LEGACY_TOKEN_FILE if token_file is None else token_file)
     if legacy.suffix == ".txt" and legacy.exists():
-        lines = [l.strip() for l in legacy.read_text().splitlines() if l.strip()]
+        lines = [line.strip() for line in legacy.read_text().splitlines() if line.strip()]
         if len(lines) < 2:
-            raise TokenError(
-                f"{legacy} must have 2 lines (Firefox token, Chrome token)."
-            )
+            raise TokenError(f"{legacy} must have 2 lines (Firefox token, Chrome token).")
         return Tokens(firefox=lines[0], chrome=lines[1])
 
-    raise TokenError(
-        "No tokens found. Run `mi-unlock setup` to configure your tokens."
-    )
+    raise TokenError("No tokens found. Run `mi-unlock setup` to configure your tokens.")
 
 
 def save_tokens(tokens: Tokens, path: Path = DEFAULT_TOKEN_FILE) -> None:
@@ -113,9 +107,7 @@ def _prompt_browser(label: str, exclude_key: str | None = None) -> str:
     valid_indices: list[int] = []
     for i, key in enumerate(BROWSER_CHOICES, 1):
         if key == exclude_key:
-            console.print(
-                f"  [dim]{i}. {BROWSER_UI[key]['label']} (already used — pick a different browser)[/dim]"
-            )
+            console.print(f"  [dim]{i}. {BROWSER_UI[key]['label']} (already used — pick a different browser)[/dim]")
         else:
             console.print(f"  [bold]{i}[/bold]. {BROWSER_UI[key]['label']}")
             valid_indices.append(i)
@@ -156,9 +148,7 @@ def _collect_cookie(cookie_name: str, exclude_browser: str | None = None) -> tup
                 f"column for [bold]{cookie_name}[/bold], not the cookie name. "
                 f"({remaining} attempt{'s' if remaining != 1 else ''} left)[/red]"
             )
-    raise click.ClickException(
-        f"Too many invalid attempts for {cookie_name}. Run `mi-unlock setup` to try again."
-    )
+    raise click.ClickException(f"Too many invalid attempts for {cookie_name}. Run `mi-unlock setup` to try again.")
 
 
 def setup_wizard(token_file: Path = DEFAULT_TOKEN_FILE) -> Tokens:
@@ -222,6 +212,4 @@ def _verify_tokens(tokens: Tokens) -> None:
             "with a fresh cookie from your browser.[/yellow]"
         )
 
-    console.print(
-        f"  [dim]ℹ {COOKIE_B} (Cookie B) is used at apply-time only — not verifiable here.[/dim]"
-    )
+    console.print(f"  [dim]ℹ {COOKIE_B} (Cookie B) is used at apply-time only — not verifiable here.[/dim]")

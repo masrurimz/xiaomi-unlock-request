@@ -30,4 +30,14 @@ dev = [
     "pytest-asyncio>=0.24",
     "respx>=0.22",
     "pyinstaller>=6",
+    "ruff>=0.9",
 ]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+
+[tool.ruff.format]
+quote-style = "double"

@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 import time
 from datetime import timedelta
 from pathlib import Path
 
 import click
-from rich.console import Console
 from rich.live import Live
-from rich.panel import Panel
 
 from .config import TokenError, load_tokens, setup_wizard
 from .core import (
@@ -31,6 +28,7 @@ from .ui import (
     results_panel,
     status_panel,
 )
+
 
 # ── CLI Group ─────────────────────────────────────────────────────────
 @click.group(invoke_without_command=True)
@@ -121,7 +119,7 @@ def run(token_file: Path | None, dry_run: bool, plain: bool) -> None:
         console.print(f"[red]✗ {e}[/red]")
         sys.exit(1)
 
-    console.print(f"\n[green]✓ Loaded tokens (Firefox + Chrome)[/green]")
+    console.print("\n[green]✓ Loaded tokens (Firefox + Chrome)[/green]")
 
     # 2. Account status
     console.print("\n[bold]── Account Status ──[/bold]")
@@ -140,9 +138,7 @@ def run(token_file: Path | None, dry_run: bool, plain: bool) -> None:
         sys.exit(1)
 
     beijing = ntp_result.beijing_time
-    console.print(
-        f"  [green]✓ {ntp_result.server}: {beijing.strftime('%Y-%m-%d %H:%M:%S.%f')}[/green]"
-    )
+    console.print(f"  [green]✓ {ntp_result.server}: {beijing.strftime('%Y-%m-%d %H:%M:%S.%f')}[/green]")
 
     clock = RealClock(beijing, time.monotonic())
 
@@ -152,18 +148,16 @@ def run(token_file: Path | None, dry_run: bool, plain: bool) -> None:
     secs = (midnight - cur).total_seconds()
     h, m = int(secs // 3600), int((secs % 3600) // 60)
 
-    console.print(f"\n[bold]── Countdown ──[/bold]")
+    console.print("\n[bold]── Countdown ──[/bold]")
     console.print(f"  Target:  {midnight.strftime('%Y-%m-%d %H:%M:%S')} Beijing (UTC+8)")
     console.print(f"  Wait:    ~{h}h {m}m")
     console.print(f"  Workers: 4 × offsets {TIME_OFFSETS_MS} ms")
 
     if secs > 5:
-        asyncio.run(
-            countdown_display(midnight, clock.synced_now, TIME_OFFSETS_MS, plain=plain)
-        )
+        asyncio.run(countdown_display(midnight, clock.synced_now, TIME_OFFSETS_MS, plain=plain))
 
     # 5. Workers
-    console.print(f"\n[bold]── Firing Workers ──[/bold]")
+    console.print("\n[bold]── Firing Workers ──[/bold]")
 
     worker_statuses: dict[int, str] = {i: "waiting" for i in range(1, 5)}
     worker_attempts: dict[int, int] = {}
@@ -178,12 +172,12 @@ def run(token_file: Path | None, dry_run: bool, plain: bool) -> None:
             console=console,
             refresh_per_second=4,
         ) as live:
+
             async def _run_with_live():
                 def _on_attempt(wid, attempt, fire_time):
                     on_attempt(wid, attempt, fire_time)
-                    live.update(
-                        make_worker_table(4, TIME_OFFSETS_MS, worker_statuses, worker_attempts)
-                    )
+                    live.update(make_worker_table(4, TIME_OFFSETS_MS, worker_statuses, worker_attempts))
+
                 return await run_workers(
                     (tokens.firefox, tokens.chrome),
                     clock,

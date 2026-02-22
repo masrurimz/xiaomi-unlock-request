@@ -68,9 +68,7 @@ class RealClock:
         return time.monotonic()
 
     def synced_now(self) -> datetime:
-        return self._start_beijing + timedelta(
-            seconds=time.monotonic() - self._start_mono
-        )
+        return self._start_beijing + timedelta(seconds=time.monotonic() - self._start_mono)
 
     async def sleep(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
@@ -109,12 +107,7 @@ def gen_device_id() -> str:
 
 def build_cookie(token: str, dev_id: str) -> str:
     """Build the Xiaomi API cookie string."""
-    return (
-        f"new_bbs_serviceToken={token};"
-        f"versionCode={APP_VER};"
-        f"versionName={APP_VER_NAME};"
-        f"deviceId={dev_id};"
-    )
+    return f"new_bbs_serviceToken={token};versionCode={APP_VER};versionName={APP_VER_NAME};deviceId={dev_id};"
 
 
 def calc_target_time(clock: Clock, offset_ms: float) -> tuple[datetime, datetime]:
@@ -138,9 +131,7 @@ def sync_ntp(servers: list[str] = NTP_SERVERS) -> NtpResult:
     for server in servers:
         try:
             resp = client.request(server, version=3)
-            beijing = datetime.fromtimestamp(resp.tx_time, tz=timezone.utc).astimezone(
-                BEIJING_TZ
-            )
+            beijing = datetime.fromtimestamp(resp.tx_time, tz=timezone.utc).astimezone(BEIJING_TZ)
             return NtpResult(success=True, beijing_time=beijing, server=server)
         except Exception as e:
             last_err = str(e)
@@ -258,7 +249,7 @@ async def run_worker(
     clock: Clock,
     stop: asyncio.Event,
     dry_run: bool = False,
-    on_attempt: "callable | None" = None,
+    on_attempt: callable | None = None,
     dev_id: str | None = None,
 ) -> ApplyResult:
     """Single AQLR worker: waits until target time, then fires + retries.
@@ -317,7 +308,7 @@ async def run_worker(
             try:
                 resp = await client.post(APPLY_URL, headers=headers, content=body)
                 data = resp.json()
-            except Exception as e:
+            except Exception:
                 await clock.sleep(0.05)
                 continue
 
@@ -330,13 +321,9 @@ async def run_worker(
 
             if approved is True:
                 stop.set()
-                return ApplyResult(
-                    worker_id=wid, approved=True, attempts=attempt, message=msg, raw=data
-                )
+                return ApplyResult(worker_id=wid, approved=True, attempts=attempt, message=msg, raw=data)
             if approved is False:
-                return ApplyResult(
-                    worker_id=wid, approved=False, attempts=attempt, message=msg, raw=data
-                )
+                return ApplyResult(worker_id=wid, approved=False, attempts=attempt, message=msg, raw=data)
             # approved is None (100003 — maybe approved): verify status then retry (OG behavior)
             try:
                 s = await client.get(STATUS_URL, headers={"Cookie": build_cookie(token, dev)})
@@ -363,16 +350,19 @@ async def run_worker(
         return ApplyResult(worker_id=wid, approved=None, attempts=attempt, message="Stopped (another worker succeeded)")
 
     return ApplyResult(
-        worker_id=wid, approved=False, attempts=attempt, message=f"Timed out after {MAX_RETRY_SECS}s"
+        worker_id=wid,
+        approved=False,
+        attempts=attempt,
+        message=f"Timed out after {MAX_RETRY_SECS}s",
     )
 
 
 async def run_workers(
-    tokens: "tuple[str, str]",
+    tokens: tuple[str, str],
     clock: Clock,
     offsets: list[float] = TIME_OFFSETS_MS,
     dry_run: bool = False,
-    on_attempt: "callable | None" = None,
+    on_attempt: callable | None = None,
 ) -> list[ApplyResult]:
     """Run 4 parallel AQLR workers with alternating tokens.
 

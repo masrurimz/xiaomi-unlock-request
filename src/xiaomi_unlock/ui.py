@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Generator
 
-from rich.columns import Columns
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
-from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
 
@@ -57,7 +55,7 @@ def _fmt_countdown(seconds: float) -> str:
 
 async def countdown_display(
     midnight: datetime,
-    clock_synced_now: "callable",
+    clock_synced_now: callable,
     offsets_ms: list[float],
     plain: bool = False,
 ) -> None:
