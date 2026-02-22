@@ -259,6 +259,7 @@ async def run_worker(
     stop: asyncio.Event,
     dry_run: bool = False,
     on_attempt: "callable | None" = None,
+    dev_id: str | None = None,
 ) -> ApplyResult:
     """Single AQLR worker: waits until target time, then fires + retries.
 
@@ -270,8 +271,9 @@ async def run_worker(
         stop: Shared event — set when any worker succeeds
         dry_run: If True, skip the actual POST
         on_attempt: Optional callback(wid, attempt, fire_time) for UI updates
+        dev_id: Stable device ID to reuse (generated if not provided)
     """
-    dev = gen_device_id()
+    dev = dev_id or gen_device_id()
     target, deadline = calc_target_time(clock, offset_ms)
 
     # Coarse sleep (wake 1s early for spin-wait)
@@ -335,11 +337,26 @@ async def run_worker(
                 return ApplyResult(
                     worker_id=wid, approved=False, attempts=attempt, message=msg, raw=data
                 )
-            # approved is None (100003 — maybe)
-            return ApplyResult(
-                worker_id=wid, approved=None, attempts=attempt, message=msg, raw=data
-            )
-
+            # approved is None (100003 — maybe approved): verify status then retry (OG behavior)
+            try:
+                s = await client.get(STATUS_URL, headers={"Cookie": build_cookie(token, dev)})
+                sdata = s.json()
+                st = parse_status_response(sdata)
+            except Exception:
+                await clock.sleep(0.05)
+                continue
+            if not st.eligible:
+                # Already approved or token expired
+                approved_final = "Already approved" in st.message
+                if approved_final:
+                    stop.set()
+                return ApplyResult(
+                    worker_id=wid,
+                    approved=True if approved_final else None,
+                    attempts=attempt,
+                    message=f"{msg} → {st.message}",
+                    raw=data,
+                )
             await clock.sleep(0.01)
 
     if stop.is_set():
@@ -368,13 +385,13 @@ async def run_workers(
     """
     firefox, chrome = tokens
     token_list = [firefox, chrome, firefox, chrome]
-    # Each token gets one device_id, reused across all workers using that token
-    # (matches OG: one device_id per script instance / token)
-    dev_ids = [gen_device_id(), gen_device_id(), gen_device_id(), gen_device_id()]
+    # One stable device_id per token, reused across workers (matches OG behavior)
+    dev_firefox, dev_chrome = gen_device_id(), gen_device_id()
+    dev_ids = [dev_firefox, dev_chrome, dev_firefox, dev_chrome]
     stop = asyncio.Event()
 
     tasks = [
-        run_worker(i + 1, tok, off, clock, stop, dry_run, on_attempt, dev)
+        run_worker(i + 1, tok, off, clock, stop, dry_run, on_attempt, dev_id=dev)
         for i, (tok, off, dev) in enumerate(zip(token_list, offsets, dev_ids))
     ]
     results = await asyncio.gather(*tasks)
