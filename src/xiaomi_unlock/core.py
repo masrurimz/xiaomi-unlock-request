@@ -9,9 +9,10 @@ import asyncio
 import hashlib
 import random
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -29,7 +30,7 @@ NTP_SERVERS = [
     "ntp1.ntp-servers.net",
 ]
 
-TIME_OFFSETS_MS = [1400, 900, 400, 100]
+TIME_OFFSETS_MS: list[float] = [1400, 900, 400, 100]
 
 STATUS_URL = "https://sgp-api.buy.mi.com/bbs/api/global/user/bl-switch/state"
 APPLY_URL = "https://sgp-api.buy.mi.com/bbs/api/global/apply/bl-auth"
@@ -87,7 +88,7 @@ class NtpResult:
 class StatusResult:
     eligible: bool
     message: str
-    raw: dict = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -96,7 +97,7 @@ class ApplyResult:
     approved: bool | None  # True=approved, False=rejected/quota, None=maybe
     attempts: int = 0
     message: str = ""
-    raw: dict = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 # ── Utilities ──────────────────────────────────────────────────────────
@@ -150,6 +151,7 @@ async def check_status(token: str, client: httpx.AsyncClient | None = None) -> S
     own_client = client is None
     if own_client:
         client = httpx.AsyncClient(timeout=httpx.Timeout(5.0, read=15.0))
+    assert client is not None
 
     try:
         r = await client.get(STATUS_URL, headers=headers)
@@ -157,13 +159,13 @@ async def check_status(token: str, client: httpx.AsyncClient | None = None) -> S
     except Exception as e:
         return StatusResult(eligible=False, message=f"Network error: {e}")
     finally:
-        if own_client:
+        if own_client and client is not None:
             await client.aclose()
 
     return parse_status_response(data)
 
 
-def parse_status_response(data: dict) -> StatusResult:
+def parse_status_response(data: dict[str, Any]) -> StatusResult:
     """Parse raw Xiaomi status API response into typed StatusResult."""
     code = data.get("code")
 
@@ -209,7 +211,7 @@ def parse_status_response(data: dict) -> StatusResult:
     )
 
 
-def parse_apply_response(data: dict) -> tuple[str, bool | None]:
+def parse_apply_response(data: dict[str, Any]) -> tuple[str, bool | None]:
     """Parse raw apply API response.
 
     Returns (message, approved):
@@ -249,7 +251,7 @@ async def run_worker(
     clock: Clock,
     stop: asyncio.Event,
     dry_run: bool = False,
-    on_attempt: callable | None = None,
+    on_attempt: Callable[[int, int, datetime], None] | None = None,
     dev_id: str | None = None,
 ) -> ApplyResult:
     """Single AQLR worker: waits until target time, then fires + retries.
@@ -362,7 +364,7 @@ async def run_workers(
     clock: Clock,
     offsets: list[float] = TIME_OFFSETS_MS,
     dry_run: bool = False,
-    on_attempt: callable | None = None,
+    on_attempt: Callable[[int, int, datetime], None] | None = None,
 ) -> list[ApplyResult]:
     """Run 4 parallel AQLR workers with alternating tokens.
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import click
@@ -14,6 +14,7 @@ from rich.live import Live
 from .config import TokenError, load_tokens, setup_wizard
 from .core import (
     TIME_OFFSETS_MS,
+    ApplyResult,
     RealClock,
     StatusResult,
     check_status,
@@ -138,6 +139,7 @@ def run(token_file: Path | None, dry_run: bool, plain: bool) -> None:
         sys.exit(1)
 
     beijing = ntp_result.beijing_time
+    assert beijing is not None
     console.print(f"  [green]✓ {ntp_result.server}: {beijing.strftime('%Y-%m-%d %H:%M:%S.%f')}[/green]")
 
     clock = RealClock(beijing, time.monotonic())
@@ -162,7 +164,7 @@ def run(token_file: Path | None, dry_run: bool, plain: bool) -> None:
     worker_statuses: dict[int, str] = {i: "waiting" for i in range(1, 5)}
     worker_attempts: dict[int, int] = {}
 
-    def on_attempt(wid: int, attempt: int, fire_time) -> None:
+    def on_attempt(wid: int, attempt: int, fire_time: datetime) -> None:
         worker_statuses[wid] = "firing"
         worker_attempts[wid] = attempt
 
@@ -173,8 +175,8 @@ def run(token_file: Path | None, dry_run: bool, plain: bool) -> None:
             refresh_per_second=4,
         ) as live:
 
-            async def _run_with_live():
-                def _on_attempt(wid, attempt, fire_time):
+            async def _run_with_live() -> list[ApplyResult]:
+                def _on_attempt(wid: int, attempt: int, fire_time: datetime) -> None:
                     on_attempt(wid, attempt, fire_time)
                     live.update(make_worker_table(4, TIME_OFFSETS_MS, worker_statuses, worker_attempts))
 

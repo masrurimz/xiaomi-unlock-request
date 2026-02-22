@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from datetime import datetime
 
@@ -55,7 +55,7 @@ def _fmt_countdown(seconds: float) -> str:
 
 async def countdown_display(
     midnight: datetime,
-    clock_synced_now: callable,
+    clock_synced_now: Callable[[], datetime],
     offsets_ms: list[float],
     plain: bool = False,
 ) -> None:

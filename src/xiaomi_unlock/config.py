@@ -182,11 +182,11 @@ def _verify_tokens(tokens: Tokens) -> None:
     the API always interprets the cookie as new_bbs_serviceToken regardless of name.
     Cookie B (popRunToken) is used only at apply-time and cannot be pre-verified here.
     """
-    from xiaomi_unlock.core import check_status
+    from xiaomi_unlock.core import StatusResult, check_status
 
     console.print("\n[bold]Verifying Cookie A (new_bbs_serviceToken)…[/bold]")
 
-    async def _run_checks() -> tuple:
+    async def _run_checks() -> StatusResult:
         result_a = await check_status(tokens.firefox)
         return result_a
 
