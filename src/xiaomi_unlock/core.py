@@ -183,7 +183,7 @@ def parse_status_response(data: dict[str, Any]) -> StatusResult:
             raw=data,
         )
 
-    info = data.get("data", {})
+    info = data.get("data") or {}
     is_pass = info.get("is_pass")
     btn = info.get("button_state")
     deadline = info.get("deadline_format", "")
@@ -228,7 +228,7 @@ def parse_apply_response(data: dict[str, Any]) -> tuple[str, bool | None]:
       raises ValueError for retry-able rejections (100001)
     """
     code = data.get("code")
-    info = data.get("data", {})
+    info = data.get("data") or {}
     result = info.get("apply_result")
 
     if code == 0:
@@ -382,6 +382,8 @@ async def run_workers(
         dry_run: Skip actual HTTP POSTs
         on_attempt: Optional callback(wid, attempt, fire_time) for UI updates
     """
+    if len(offsets) != 4:
+        raise ValueError(f"run_workers requires exactly 4 offsets, got {len(offsets)}")
     firefox, chrome = tokens
     token_list = [firefox, chrome, firefox, chrome]
     # One stable device_id per token, reused across workers (matches OG behavior)

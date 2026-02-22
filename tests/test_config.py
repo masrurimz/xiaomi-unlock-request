@@ -8,7 +8,7 @@ import json
 import stat
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import click
 import pytest
@@ -16,7 +16,6 @@ import pytest
 import xiaomi_unlock.config as cfg
 import xiaomi_unlock.core as core
 from xiaomi_unlock.config import (
-    BROWSER_CHOICES,
     COOKIE_A,
     COOKIE_B,
     TokenError,
@@ -29,7 +28,6 @@ from xiaomi_unlock.config import (
     setup_wizard,
     validate_token,
 )
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -368,7 +366,9 @@ class TestVerifyTokens:
 # ── setup_wizard (integration) ────────────────────────────────────────────────
 
 class TestSetupWizard:
-    def test_saves_tokens_calls_verify_returns_tokens(self, monkeypatch, tmp_path, fake_console, valid_token, valid_token2):
+    def test_saves_tokens_calls_verify_returns_tokens(
+        self, monkeypatch, tmp_path, fake_console, valid_token, valid_token2
+    ):
         token_file = tmp_path / "tokens.json"
 
         collect_calls = []
@@ -394,7 +394,9 @@ class TestSetupWizard:
         assert len(verify_calls) == 1
         assert verify_calls[0] == result
 
-    def test_collect_cookie_called_twice_with_correct_exclusion(self, monkeypatch, tmp_path, fake_console, valid_token, valid_token2):
+    def test_collect_cookie_called_twice_with_correct_exclusion(
+        self, monkeypatch, tmp_path, fake_console, valid_token, valid_token2
+    ):
         collect_calls = []
         def fake_collect(cookie_name, exclude_browser=None):
             collect_calls.append((cookie_name, exclude_browser))

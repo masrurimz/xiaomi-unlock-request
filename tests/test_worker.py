@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 
+import httpx
 import pytest
 import respx
-import httpx
 
 from xiaomi_unlock.core import (
-    APPLY_URL,
     BEIJING_TZ,
     ApplyResult,
     run_worker,
@@ -204,3 +203,214 @@ async def test_run_workers_stops_all_on_approval():
 
     assert result.approved is True
     assert stop.is_set()  # stop event was set, would halt other workers
+
+
+# ── [z3b] stop set during coarse sleep ───────────────────────────────
+class StopDuringSleepClock:
+    """Clock whose sleep() sets the stop event, simulating early abort.
+
+    synced_now() returns pre-target before first sleep (triggers coarse sleep),
+    then returns time PAST the deadline after sleep so the spin-wait and retry
+    loop both exit immediately without any POST being fired.
+    """
+
+    def __init__(self, stop: asyncio.Event):
+        self._stop = stop
+        # 10 minutes before midnight — ensures wait > 2s → coarse sleep fires
+        self._base = datetime(2026, 2, 21, 23, 50, 0, tzinfo=BEIJING_TZ)
+        # Past-deadline time: 31s after next midnight (deadline = midnight+30s)
+        self._past_deadline = datetime(2026, 2, 22, 0, 0, 31, tzinfo=BEIJING_TZ)
+        self._slept = False
+
+    def monotonic(self) -> float:
+        return 0.0
+
+    def synced_now(self) -> datetime:
+        # After sleep, return past-deadline so spin-wait exits and retry loop exits
+        return self._past_deadline if self._slept else self._base
+
+    async def sleep(self, seconds: float) -> None:
+        self._stop.set()
+        self._slept = True
+
+
+@pytest.mark.asyncio
+async def test_worker_stop_during_coarse_sleep():
+    """Worker aborted during coarse sleep must not fire any POST."""
+    stop = asyncio.Event()
+    clock = StopDuringSleepClock(stop)
+
+    with respx.mock(base_url="https://sgp-api.buy.mi.com", assert_all_called=False) as m:
+        m.post("/bbs/api/global/apply/bl-auth").mock(
+            return_value=httpx.Response(200, json={"code": 0, "data": {"apply_result": 1}})
+        )
+        result = await run_worker(1, "t" * 40, 0, clock, stop)
+        # No POST should have been fired
+        assert m.calls.call_count == 0
+
+    # Worker should not report approved since it was stopped before firing
+    assert result.approved is not True
+
+
+# ── [qfh] run_workers: wrong offset count raises ValueError ───────────
+@pytest.mark.asyncio
+async def test_run_workers_wrong_offset_count_raises():
+    """run_workers with != 4 offsets must raise ValueError immediately."""
+    clock = InstantClock()
+    with pytest.raises(ValueError, match="4 offsets"):
+        await run_workers(("ff_tok", "ch_tok"), clock, offsets=[1400, 900])
+
+
+# ── [x7j] worker 100003 sequences ────────────────────────────────────
+@pytest.mark.asyncio
+async def test_worker_100003_then_status_approved():
+    """POST→100003, GET status→is_pass=1 (already approved) → result.approved=True, stop set."""
+    clock = InstantClock()
+    stop = asyncio.Event()
+
+    with respx.mock(base_url="https://sgp-api.buy.mi.com") as m:
+        m.post("/bbs/api/global/apply/bl-auth").mock(
+            return_value=httpx.Response(200, json={"code": 100003})
+        )
+        m.get("/bbs/api/global/user/bl-switch/state").mock(
+            return_value=httpx.Response(
+                200, json={"code": 0, "data": {"is_pass": 1, "deadline_format": "2026-03-01"}}
+            )
+        )
+        result = await run_worker(1, "t" * 40, 0, clock, stop)
+
+    assert result.approved is True
+    assert stop.is_set()
+
+
+@pytest.mark.asyncio
+async def test_worker_100003_then_status_expired():
+    """POST→100003, GET status→code=100004 (token expired) → not approved, stop NOT set."""
+    clock = InstantClock()
+    stop = asyncio.Event()
+
+    with respx.mock(base_url="https://sgp-api.buy.mi.com") as m:
+        m.post("/bbs/api/global/apply/bl-auth").mock(
+            return_value=httpx.Response(200, json={"code": 100003})
+        )
+        m.get("/bbs/api/global/user/bl-switch/state").mock(
+            return_value=httpx.Response(200, json={"code": 100004})
+        )
+        result = await run_worker(1, "t" * 40, 0, clock, stop)
+
+    assert result.approved is not True
+    assert not stop.is_set()
+
+
+@pytest.mark.asyncio
+async def test_worker_100003_then_status_still_eligible_then_approved():
+    """POST→100003, GET status→eligible (retry), next POST→approved → result.approved=True."""
+    clock = InstantClock()
+    stop = asyncio.Event()
+
+    post_responses = [
+        httpx.Response(200, json={"code": 100003}),
+        httpx.Response(200, json={"code": 0, "data": {"apply_result": 1}}),
+    ]
+    status_resp = httpx.Response(
+        200, json={"code": 0, "data": {"is_pass": 4, "button_state": 1}}
+    )
+
+    with respx.mock(base_url="https://sgp-api.buy.mi.com") as m:
+        m.post("/bbs/api/global/apply/bl-auth").mock(side_effect=post_responses)
+        m.get("/bbs/api/global/user/bl-switch/state").mock(return_value=status_resp)
+        result = await run_worker(1, "t" * 40, 0, clock, stop)
+
+    assert result.approved is True
+    assert result.attempts >= 2
+
+
+# ── [lu8] worker network errors ───────────────────────────────────────
+@pytest.mark.asyncio
+async def test_worker_read_timeout_then_approved():
+    """POST raises ReadTimeout, second POST returns approved → approved=True, attempts==2."""
+    clock = InstantClock()
+    stop = asyncio.Event()
+
+    post_responses: list = [
+        httpx.ReadTimeout("timed out"),
+        httpx.Response(200, json={"code": 0, "data": {"apply_result": 1}}),
+    ]
+
+    with respx.mock(base_url="https://sgp-api.buy.mi.com") as m:
+        m.post("/bbs/api/global/apply/bl-auth").mock(side_effect=post_responses)
+        result = await run_worker(1, "t" * 40, 0, clock, stop)
+
+    assert result.approved is True
+    assert result.attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_worker_json_decode_error_then_approved():
+    """POST returns non-JSON body, second POST returns approved → approved=True."""
+    clock = InstantClock()
+    stop = asyncio.Event()
+
+    bad_response = httpx.Response(200, text="not json at all")
+    good_response = httpx.Response(200, json={"code": 0, "data": {"apply_result": 1}})
+
+    with respx.mock(base_url="https://sgp-api.buy.mi.com") as m:
+        m.post("/bbs/api/global/apply/bl-auth").mock(side_effect=[bad_response, good_response])
+        result = await run_worker(1, "t" * 40, 0, clock, stop)
+
+    assert result.approved is True
+
+
+@pytest.mark.asyncio
+async def test_worker_http_500_applies_result():
+    """HTTP 500 with valid JSON body → code=0 apply_result=1 → approved (document behavior)."""
+    clock = InstantClock()
+    stop = asyncio.Event()
+
+    with respx.mock(base_url="https://sgp-api.buy.mi.com") as m:
+        m.post("/bbs/api/global/apply/bl-auth").mock(
+            return_value=httpx.Response(500, json={"code": 0, "data": {"apply_result": 1}})
+        )
+        result = await run_worker(1, "t" * 40, 0, clock, stop)
+
+    # HTTP status is ignored; JSON body drives logic → approved
+    assert result.approved is True
+
+
+# ── [w3m] run_workers token alternation + dev_id sharing ─────────────
+@pytest.mark.asyncio
+async def test_run_workers_token_and_devid_alternation(monkeypatch):
+    """run_workers alternates ff/ch tokens and shares dev_id per token."""
+    captured: list[dict] = []
+
+    async def fake_run_worker(
+        wid: int,
+        token: str,
+        offset_ms: float,
+        clock,
+        stop: asyncio.Event,
+        dry_run: bool = False,
+        on_attempt=None,
+        dev_id: str | None = None,
+    ) -> ApplyResult:
+        captured.append({"wid": wid, "token": token, "dev_id": dev_id})
+        return ApplyResult(worker_id=wid, approved=None, message="stub")
+
+    import xiaomi_unlock.core as core_mod
+
+    monkeypatch.setattr(core_mod, "run_worker", fake_run_worker)
+
+    clock = InstantClock()
+    await run_workers(("firefox_tok", "chrome_tok"), clock, dry_run=True)
+
+    assert len(captured) == 4
+    # Token alternation
+    assert captured[0]["token"] == "firefox_tok"
+    assert captured[1]["token"] == "chrome_tok"
+    assert captured[2]["token"] == "firefox_tok"
+    assert captured[3]["token"] == "chrome_tok"
+    # dev_id stability: workers sharing same token share same dev_id
+    assert captured[0]["dev_id"] == captured[2]["dev_id"]
+    assert captured[1]["dev_id"] == captured[3]["dev_id"]
+    # Workers with different tokens have different dev_ids
+    assert captured[0]["dev_id"] != captured[1]["dev_id"]
