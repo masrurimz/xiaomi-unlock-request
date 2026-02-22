@@ -74,12 +74,47 @@ def test_calc_target_time_offset():
 
 def test_calc_target_time_deadline():
     from xiaomi_unlock.core import MAX_RETRY_SECS
+
     clock = make_clock(hour=23, minute=50)
     _, deadline = calc_target_time(clock, offset_ms=0)
 
     # Deadline = midnight + 30s
     assert deadline.hour == 0
     assert deadline.second == MAX_RETRY_SECS
+
+
+def test_calc_target_time_just_after_midnight():
+    """Workers started seconds after midnight must target THIS midnight, not tomorrow's.
+
+    Regression for: countdown ends at 00:00:00, workers call calc_target_time at
+    00:00:02 — previously returned tomorrow's midnight (24h away), causing all
+    workers to sit in 'waiting' forever.
+    """
+    from xiaomi_unlock.core import MAX_RETRY_SECS
+
+    # Simulate: workers start 2 seconds after midnight
+    dt = datetime(2026, 2, 23, 0, 0, 2, tzinfo=BEIJING_TZ)
+    clock = FakeClock(dt)
+    target, deadline = calc_target_time(clock, offset_ms=0)
+
+    # Must target Feb 23 00:00:00 — NOT Feb 24 00:00:00
+    assert target.day == 23
+    assert target.hour == 0
+    assert target.minute == 0
+    assert target.second == 0
+    # Deadline is only 30s after midnight — workers should fire immediately
+    assert (deadline - target).total_seconds() == MAX_RETRY_SECS
+
+
+def test_calc_target_time_well_after_midnight_targets_tomorrow():
+    """During the day (e.g. 12:00), target should be next midnight."""
+    dt = datetime(2026, 2, 23, 12, 0, 0, tzinfo=BEIJING_TZ)
+    clock = FakeClock(dt)
+    target, _ = calc_target_time(clock, offset_ms=0)
+
+    # Next midnight = Feb 24 00:00:00
+    assert target.day == 24
+    assert target.hour == 0
 
 
 # ── parse_status_response ─────────────────────────────────────────────
