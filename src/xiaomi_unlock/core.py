@@ -118,8 +118,15 @@ def calc_target_time(clock: Clock, offset_ms: float) -> tuple[datetime, datetime
     deadline = next midnight Beijing + MAX_RETRY_SECS
     """
     cur = clock.synced_now()
-    tomorrow = cur + timedelta(days=1)
-    midnight = tomorrow.replace(hour=0, minute=0, second=0, microsecond=0)
+    # Midnight that just started today (00:00:00 of current calendar day)
+    today_midnight = cur.replace(hour=0, minute=0, second=0, microsecond=0)
+    seconds_since_midnight = (cur - today_midnight).total_seconds()
+    # If workers start within MAX_RETRY_SECS after midnight (e.g. countdown just ended),
+    # target the midnight we just crossed — not tomorrow's midnight 24h away.
+    if seconds_since_midnight < MAX_RETRY_SECS:
+        midnight = today_midnight
+    else:
+        midnight = today_midnight + timedelta(days=1)
     target = midnight - timedelta(milliseconds=offset_ms)
     deadline = midnight + timedelta(seconds=MAX_RETRY_SECS)
     return target, deadline
