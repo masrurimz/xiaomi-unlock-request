@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 import pytest
@@ -178,10 +178,7 @@ async def test_run_workers_returns_four_results():
     clocks = [InstantClock() for _ in range(4)]
     stop = asyncio.Event()
 
-    tasks = [
-        run_worker(i + 1, "f" * 40, 0, clocks[i], stop, dry_run=True)
-        for i in range(4)
-    ]
+    tasks = [run_worker(i + 1, "f" * 40, 0, clocks[i], stop, dry_run=True) for i in range(4)]
     results = await asyncio.gather(*tasks)
 
     assert len(results) == 4
@@ -252,13 +249,13 @@ async def test_worker_stop_during_coarse_sleep():
     assert result.approved is not True
 
 
-# ── [qfh] run_workers: wrong offset count raises ValueError ───────────
+# ── Invalid schedules fail before dispatch ──────────────────────────
 @pytest.mark.asyncio
-async def test_run_workers_wrong_offset_count_raises():
-    """run_workers with != 4 offsets must raise ValueError immediately."""
+@pytest.mark.parametrize("offsets", [[], [float("nan")], [float("inf")], [-30000], [-40000], [86400000]])
+async def test_run_workers_invalid_offsets_raise(offsets):
     clock = InstantClock()
-    with pytest.raises(ValueError, match="4 offsets"):
-        await run_workers(("ff_tok", "ch_tok"), clock, offsets=[1400, 900])
+    with pytest.raises(ValueError):
+        await run_workers(("ff_tok", "ch_tok"), clock, offsets=offsets)
 
 
 # ── [x7j] worker 100003 sequences ────────────────────────────────────
@@ -269,13 +266,9 @@ async def test_worker_100003_then_status_approved():
     stop = asyncio.Event()
 
     with respx.mock(base_url="https://sgp-api.buy.mi.com") as m:
-        m.post("/bbs/api/global/apply/bl-auth").mock(
-            return_value=httpx.Response(200, json={"code": 100003})
-        )
+        m.post("/bbs/api/global/apply/bl-auth").mock(return_value=httpx.Response(200, json={"code": 100003}))
         m.get("/bbs/api/global/user/bl-switch/state").mock(
-            return_value=httpx.Response(
-                200, json={"code": 0, "data": {"is_pass": 1, "deadline_format": "2026-03-01"}}
-            )
+            return_value=httpx.Response(200, json={"code": 0, "data": {"is_pass": 1, "deadline_format": "2026-03-01"}})
         )
         result = await run_worker(1, "t" * 40, 0, clock, stop)
 
@@ -290,12 +283,8 @@ async def test_worker_100003_then_status_expired():
     stop = asyncio.Event()
 
     with respx.mock(base_url="https://sgp-api.buy.mi.com") as m:
-        m.post("/bbs/api/global/apply/bl-auth").mock(
-            return_value=httpx.Response(200, json={"code": 100003})
-        )
-        m.get("/bbs/api/global/user/bl-switch/state").mock(
-            return_value=httpx.Response(200, json={"code": 100004})
-        )
+        m.post("/bbs/api/global/apply/bl-auth").mock(return_value=httpx.Response(200, json={"code": 100003}))
+        m.get("/bbs/api/global/user/bl-switch/state").mock(return_value=httpx.Response(200, json={"code": 100004}))
         result = await run_worker(1, "t" * 40, 0, clock, stop)
 
     assert result.approved is not True
@@ -312,9 +301,7 @@ async def test_worker_100003_then_status_still_eligible_then_approved():
         httpx.Response(200, json={"code": 100003}),
         httpx.Response(200, json={"code": 0, "data": {"apply_result": 1}}),
     ]
-    status_resp = httpx.Response(
-        200, json={"code": 0, "data": {"is_pass": 4, "button_state": 1}}
-    )
+    status_resp = httpx.Response(200, json={"code": 0, "data": {"is_pass": 4, "button_state": 1}})
 
     with respx.mock(base_url="https://sgp-api.buy.mi.com") as m:
         m.post("/bbs/api/global/apply/bl-auth").mock(side_effect=post_responses)
@@ -379,7 +366,8 @@ async def test_worker_http_500_applies_result():
 
 # ── [w3m] run_workers token alternation + dev_id sharing ─────────────
 @pytest.mark.asyncio
-async def test_run_workers_token_and_devid_alternation(monkeypatch):
+@pytest.mark.parametrize("worker_count", [1, 2, 4, 6])
+async def test_run_workers_token_and_devid_alternation(monkeypatch, worker_count):
     """run_workers alternates ff/ch tokens and shares dev_id per token."""
     captured: list[dict] = []
 
@@ -392,8 +380,10 @@ async def test_run_workers_token_and_devid_alternation(monkeypatch):
         dry_run: bool = False,
         on_attempt=None,
         dev_id: str | None = None,
+        *,
+        midnight: datetime | None = None,
     ) -> ApplyResult:
-        captured.append({"wid": wid, "token": token, "dev_id": dev_id})
+        captured.append({"wid": wid, "token": token, "dev_id": dev_id, "offset": offset_ms, "midnight": midnight})
         return ApplyResult(worker_id=wid, approved=None, message="stub")
 
     import xiaomi_unlock.core as core_mod
@@ -401,16 +391,82 @@ async def test_run_workers_token_and_devid_alternation(monkeypatch):
     monkeypatch.setattr(core_mod, "run_worker", fake_run_worker)
 
     clock = InstantClock()
-    await run_workers(("firefox_tok", "chrome_tok"), clock, dry_run=True)
+    offsets = [1400, 900, 400, 100, 0, -500][:worker_count]
+    results = await run_workers(("firefox_tok", "chrome_tok"), clock, offsets=offsets, dry_run=True)
 
-    assert len(captured) == 4
-    # Token alternation
-    assert captured[0]["token"] == "firefox_tok"
-    assert captured[1]["token"] == "chrome_tok"
-    assert captured[2]["token"] == "firefox_tok"
-    assert captured[3]["token"] == "chrome_tok"
-    # dev_id stability: workers sharing same token share same dev_id
-    assert captured[0]["dev_id"] == captured[2]["dev_id"]
-    assert captured[1]["dev_id"] == captured[3]["dev_id"]
-    # Workers with different tokens have different dev_ids
-    assert captured[0]["dev_id"] != captured[1]["dev_id"]
+    assert len(captured) == len(results) == worker_count
+    midnight = datetime(2026, 2, 22, tzinfo=BEIJING_TZ)
+    for i, worker in enumerate(captured):
+        assert worker["wid"] == i + 1
+        assert worker["offset"] == offsets[i]
+        assert worker["midnight"] == midnight
+        assert worker["token"] == ("firefox_tok", "chrome_tok")[i % 2]
+        assert worker["dev_id"] == captured[i % 2]["dev_id"]
+    if worker_count > 1:
+        assert captured[0]["dev_id"] != captured[1]["dev_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("offset", [1400, 900, 400, 100, 0, -500])
+async def test_request_time_includes_client_setup_before_wait(monkeypatch, offset):
+    """Real worker + mocked HTTP: setup cost must not shift the first POST past its target."""
+
+    class Clock:
+        now = datetime(2026, 2, 21, 23, 59, 50, tzinfo=BEIJING_TZ)
+
+        def synced_now(self):
+            return self.now
+
+        async def sleep(self, seconds):
+            self.now += timedelta(seconds=seconds)
+
+    clock = Clock()
+    midnight = datetime(2026, 2, 22, tzinfo=BEIJING_TZ)
+    target = midnight - timedelta(milliseconds=offset)
+    real_client = httpx.AsyncClient
+    setup_times = []
+    post_times = []
+
+    def slow_client(*args, **kwargs):
+        setup_times.append(clock.now)
+        clock.now += timedelta(milliseconds=250)
+        return real_client(*args, **kwargs)
+
+    def receive(request):
+        post_times.append(clock.now)
+        return httpx.Response(200, json={"code": 0, "data": {"apply_result": 3}})
+
+    monkeypatch.setattr(httpx, "AsyncClient", slow_client)
+    with respx.mock(base_url="https://sgp-api.buy.mi.com") as router:
+        router.post("/bbs/api/global/apply/bl-auth").mock(side_effect=receive)
+        await run_worker(1, "test-token", offset, clock, asyncio.Event(), midnight=midnight)
+
+    assert setup_times[0] < target
+    assert len(post_times) == 1
+    assert timedelta(0) <= post_times[0] - target <= timedelta(microseconds=100)
+    if offset > 0:
+        assert post_times[0] < midnight
+    elif offset < 0:
+        assert post_times[0] > midnight
+
+
+@pytest.mark.asyncio
+async def test_approval_interrupts_long_worker_wait():
+    started = asyncio.Event()
+
+    class Clock:
+        def synced_now(self):
+            return datetime(2026, 2, 21, 23, 50, tzinfo=BEIJING_TZ)
+
+        async def sleep(self, seconds):
+            started.set()
+            await asyncio.Event().wait()
+
+    stop = asyncio.Event()
+    with respx.mock(assert_all_called=False) as router:
+        task = asyncio.create_task(run_worker(1, "test-token", 100, Clock(), stop))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        stop.set()
+        result = await asyncio.wait_for(task, timeout=1)
+        assert len(router.calls) == 0
+    assert result.message == "Stopped (another worker succeeded)"

@@ -8,10 +8,8 @@ from contextlib import contextmanager
 from datetime import datetime
 
 from rich.console import Console
-from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
 
 from .core import ApplyResult, StatusResult
 
@@ -56,48 +54,23 @@ def _fmt_countdown(seconds: float) -> str:
 async def countdown_display(
     midnight: datetime,
     clock_synced_now: Callable[[], datetime],
-    offsets_ms: list[float],
-    plain: bool = False,
 ) -> None:
-    """Show a live HH:MM:SS countdown until midnight Beijing.
+    """Log a flushed, timestamped countdown line whenever the displayed second changes.
 
     Args:
         midnight: Target datetime (midnight Beijing)
         clock_synced_now: Callable returning current synced datetime
-        offsets_ms: Worker offsets to display
-        plain: If True, print lines instead of Rich Live
     """
-    if plain:
-        remaining = (midnight - clock_synced_now()).total_seconds()
-        while remaining > 1:
-            remaining = (midnight - clock_synced_now()).total_seconds()
-            print(f"  Waiting: {_fmt_countdown(remaining)}", end="\r", flush=True)
-            await asyncio.sleep(1)
-        print()
-        return
-
-    def make_panel() -> Panel:
-        remaining = (midnight - clock_synced_now()).total_seconds()
-        countdown_text = Text(_fmt_countdown(remaining), style="bold cyan", justify="center")
-        body = (
-            countdown_text.markup
-            + f"\n\n[dim]Target:[/dim] {midnight.strftime('%Y-%m-%d %H:%M:%S')} Beijing (UTC+8)"
-            + f"\n[dim]Workers:[/dim] {len(offsets_ms)} × offsets {offsets_ms} ms"
-            + "\n\n[yellow]Keep this terminal open![/yellow]"
-        )
-        return Panel(
-            body,
-            title="[bold]⏱ Countdown to Midnight[/bold]",
-            border_style="cyan",
-            padding=(1, 4),
-        )
-
+    last_countdown: str | None = None
     remaining = (midnight - clock_synced_now()).total_seconds()
-    with Live(make_panel(), console=console, refresh_per_second=2) as live:
-        while remaining > 0.5:
-            remaining = (midnight - clock_synced_now()).total_seconds()
-            live.update(make_panel())
-            await asyncio.sleep(0.5)
+    while remaining > 0.5:
+        now = clock_synced_now()
+        remaining = (midnight - now).total_seconds()
+        countdown = _fmt_countdown(remaining)
+        if countdown != last_countdown:
+            print(f"{now:%Y-%m-%d %H:%M:%S} Beijing | Waiting: {countdown}", flush=True)
+            last_countdown = countdown
+        await asyncio.sleep(0.5)
 
 
 # ── Worker Table ──────────────────────────────────────────────────────
