@@ -104,7 +104,7 @@ def status(token_file: Path | None) -> None:
 @click.option(
     "--plain",
     is_flag=True,
-    help="Line-based output (no Rich Live countdown or worker table)",
+    help="Disable the Rich Live worker table (countdown always logs new lines)",
 )
 def run(token_file: Path | None, dry_run: bool, plain: bool) -> None:
     """Run the AQLR unlock attempt at next Beijing midnight."""
@@ -156,7 +156,7 @@ def run(token_file: Path | None, dry_run: bool, plain: bool) -> None:
     console.print(f"  Workers: 4 × offsets {TIME_OFFSETS_MS} ms")
 
     if secs > 5:
-        asyncio.run(countdown_display(midnight, clock.synced_now, TIME_OFFSETS_MS, plain=plain))
+        asyncio.run(countdown_display(midnight, clock.synced_now))
 
     # 5. Workers
     console.print("\n[bold]── Firing Workers ──[/bold]")

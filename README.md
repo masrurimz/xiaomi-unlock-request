@@ -57,14 +57,14 @@ uv run mi-unlock run
 The script will:
 1. Check your account eligibility
 2. Sync time via NTP servers
-3. Count down to midnight Beijing time
+3. Count down to midnight Beijing time, logging a new timestamped line each second
 4. Fire 4 parallel requests at offsets: 1400, 900, 400, 100ms before midnight
 5. Retry in a tight loop for 30 seconds after midnight
 
 ### Options for `run`
 ```bash
 uv run mi-unlock run --dry-run    # Test everything except the actual HTTP POST
-uv run mi-unlock run --plain      # Line-based output (no Rich Live display)
+uv run mi-unlock run --plain      # Disable the live worker table; countdown always logs new lines
 uv run mi-unlock run --token-file /path/to/tokens.json
 ```
 
