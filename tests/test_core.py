@@ -120,6 +120,16 @@ def test_calc_target_time_well_after_midnight_targets_tomorrow():
     assert target.hour == 0
 
 
+def test_explicit_midnight_does_not_roll_over_after_retry_deadline():
+    """A delayed worker retains the run's expired deadline instead of waiting another day."""
+    midnight = datetime(2026, 2, 23, tzinfo=BEIJING_TZ)
+    clock = FakeClock(datetime(2026, 2, 23, 0, 1, tzinfo=BEIJING_TZ))
+    target, deadline = calc_target_time(clock, 500, midnight=midnight)
+    assert (midnight - target).total_seconds() == 0.5
+    assert (deadline - midnight).total_seconds() == MAX_RETRY_SECS
+    assert deadline < clock.synced_now()
+
+
 # ── parse_status_response ─────────────────────────────────────────────
 def test_parse_status_token_expired():
     result = parse_status_response({"code": 100004})

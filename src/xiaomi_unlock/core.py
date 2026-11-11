@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import random
 import time
 from collections.abc import Callable
@@ -111,22 +112,31 @@ def build_cookie(token: str, dev_id: str) -> str:
     return f"new_bbs_serviceToken={token};versionCode={APP_VER};versionName={APP_VER_NAME};deviceId={dev_id};"
 
 
-def calc_target_time(clock: Clock, offset_ms: float) -> tuple[datetime, datetime]:
+def validate_offsets(offsets: list[float]) -> None:
+    """Reject empty schedules and targets outside this midnight's request window."""
+    if not offsets:
+        raise ValueError("Provide at least one offset in milliseconds")
+    if any(not math.isfinite(offset) for offset in offsets):
+        raise ValueError("Offsets must be finite numbers")
+    if any(not -MAX_RETRY_SECS * 1000 < offset < 86_400_000 for offset in offsets):
+        raise ValueError("Offsets must be greater than -30000 and less than 86400000 ms")
+
+
+def calc_target_time(clock: Clock, offset_ms: float, *, midnight: datetime | None = None) -> tuple[datetime, datetime]:
     """Return (target_fire_time, deadline) for a worker given offset in ms.
 
     target = next midnight Beijing − offset_ms
     deadline = next midnight Beijing + MAX_RETRY_SECS
     """
-    cur = clock.synced_now()
-    # Midnight that just started today (00:00:00 of current calendar day)
-    today_midnight = cur.replace(hour=0, minute=0, second=0, microsecond=0)
-    seconds_since_midnight = (cur - today_midnight).total_seconds()
-    # If workers start within MAX_RETRY_SECS after midnight (e.g. countdown just ended),
-    # target the midnight we just crossed — not tomorrow's midnight 24h away.
-    if seconds_since_midnight < MAX_RETRY_SECS:
-        midnight = today_midnight
-    else:
-        midnight = today_midnight + timedelta(days=1)
+    if midnight is None:
+        cur = clock.synced_now()
+        today_midnight = cur.replace(hour=0, minute=0, second=0, microsecond=0)
+        seconds_since_midnight = (cur - today_midnight).total_seconds()
+        # Standalone workers started just after midnight target the current window.
+        if seconds_since_midnight < MAX_RETRY_SECS:
+            midnight = today_midnight
+        else:
+            midnight = today_midnight + timedelta(days=1)
     target = midnight - timedelta(milliseconds=offset_ms)
     deadline = midnight + timedelta(seconds=MAX_RETRY_SECS)
     return target, deadline
@@ -251,6 +261,25 @@ def parse_apply_response(data: dict[str, Any]) -> tuple[str, bool | None]:
 
 
 # ── Worker ────────────────────────────────────────────────────────────
+async def _wait_for_target(clock: Clock, target: datetime, stop: asyncio.Event) -> None:
+    """Wait until the target, allowing another worker's approval to interrupt sleep."""
+    if stop.is_set():
+        return
+    wait = (target - clock.synced_now()).total_seconds()
+    if wait > 2:
+        sleeper = asyncio.create_task(clock.sleep(wait - 1))
+        stopped = asyncio.create_task(stop.wait())
+        try:
+            await asyncio.wait((sleeper, stopped), return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            sleeper.cancel()
+            stopped.cancel()
+            await asyncio.gather(sleeper, stopped, return_exceptions=True)
+
+    while not stop.is_set() and clock.synced_now() < target:
+        await clock.sleep(0.0001)
+
+
 async def run_worker(
     wid: int,
     token: str,
@@ -260,11 +289,13 @@ async def run_worker(
     dry_run: bool = False,
     on_attempt: Callable[[int, int, datetime], None] | None = None,
     dev_id: str | None = None,
+    *,
+    midnight: datetime | None = None,
 ) -> ApplyResult:
     """Single AQLR worker: waits until target time, then fires + retries.
 
     Args:
-        wid: Worker ID (1-4)
+        wid: Worker ID (1-based)
         token: Xiaomi session token
         offset_ms: Fire this many ms before midnight
         clock: Injectable clock for testability
@@ -272,20 +303,13 @@ async def run_worker(
         dry_run: If True, skip the actual POST
         on_attempt: Optional callback(wid, attempt, fire_time) for UI updates
         dev_id: Stable device ID to reuse (generated if not provided)
+        midnight: Shared midnight for this run, pinned before workers start
     """
     dev = dev_id or gen_device_id()
-    target, deadline = calc_target_time(clock, offset_ms)
-
-    # Coarse sleep (wake 1s early for spin-wait)
-    wait = (target - clock.synced_now()).total_seconds()
-    if wait > 2:
-        await clock.sleep(wait - 1)
-
-    # Spin-wait for precision
-    while clock.synced_now() < target:
-        await clock.sleep(0.0001)
+    target, deadline = calc_target_time(clock, offset_ms, midnight=midnight)
 
     if dry_run:
+        await _wait_for_target(clock, target, stop)
         return ApplyResult(
             worker_id=wid,
             approved=None,
@@ -306,6 +330,8 @@ async def run_worker(
         timeout=httpx.Timeout(15.0, connect=2.0),
         http2=False,
     ) as client:
+        # Client setup must finish before the scheduled send time.
+        await _wait_for_target(clock, target, stop)
         attempt = 0
         while clock.synced_now() < deadline and not stop.is_set():
             attempt += 1
@@ -372,8 +398,10 @@ async def run_workers(
     offsets: list[float] = TIME_OFFSETS_MS,
     dry_run: bool = False,
     on_attempt: Callable[[int, int, datetime], None] | None = None,
+    *,
+    midnight: datetime | None = None,
 ) -> list[ApplyResult]:
-    """Run 4 parallel AQLR workers with alternating tokens.
+    """Run one AQLR worker per offset with alternating tokens.
 
     Args:
         tokens: (firefox_token, chrome_token)
@@ -381,19 +409,28 @@ async def run_workers(
         offsets: List of ms offsets before midnight (default: 4 workers)
         dry_run: Skip actual HTTP POSTs
         on_attempt: Optional callback(wid, attempt, fire_time) for UI updates
+        midnight: Shared midnight for this run; inferred once if not supplied
     """
-    if len(offsets) != 4:
-        raise ValueError(f"run_workers requires exactly 4 offsets, got {len(offsets)}")
-    firefox, chrome = tokens
-    token_list = [firefox, chrome, firefox, chrome]
+    validate_offsets(offsets)
+    if midnight is None:
+        midnight, _ = calc_target_time(clock, 0)
     # One stable device_id per token, reused across workers (matches OG behavior)
-    dev_firefox, dev_chrome = gen_device_id(), gen_device_id()
-    dev_ids = [dev_firefox, dev_chrome, dev_firefox, dev_chrome]
+    dev_ids = [gen_device_id(), gen_device_id()]
     stop = asyncio.Event()
 
     tasks = [
-        run_worker(i + 1, tok, off, clock, stop, dry_run, on_attempt, dev_id=dev)
-        for i, (tok, off, dev) in enumerate(zip(token_list, offsets, dev_ids))
+        run_worker(
+            i + 1,
+            tokens[i % 2],
+            off,
+            clock,
+            stop,
+            dry_run,
+            on_attempt,
+            dev_id=dev_ids[i % 2],
+            midnight=midnight,
+        )
+        for i, off in enumerate(offsets)
     ]
     results = await asyncio.gather(*tasks)
     return list(results)

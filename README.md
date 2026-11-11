@@ -1,6 +1,6 @@
 # Xiaomi Bootloader Unlock Request (AQLR)
 
-Sends 4 parallel HTTP requests to Xiaomi's unlock API at exactly **00:00 Beijing time (UTC+8)** with staggered timing offsets to beat the daily quota reset.
+Runs parallel workers against Xiaomi's unlock API around **00:00 Beijing time (UTC+8)** with configurable timing offsets. The default is four workers.
 
 Based on the [XDA AQLR method](https://xdaforums.com/t/how-to-unlock-bootloader-on-xiaomi-hyperos-all-devices-except-cn.4654009).
 
@@ -58,15 +58,69 @@ The script will:
 1. Check your account eligibility
 2. Sync time via NTP servers
 3. Count down to midnight Beijing time, logging a new timestamped line each second
-4. Fire 4 parallel requests at offsets: 1400, 900, 400, 100ms before midnight
-5. Retry in a tight loop for 30 seconds after midnight
+4. Arm the workers alongside the countdown, with HTTP clients initialized before their send times. The default first-request offsets are 1400, 900, 400, 100ms before midnight.
+5. Log request-attempt timestamps and retry as needed until 30 seconds after midnight (approval, rejection or quota exhaustion can stop workers earlier).
 
 ### Options for `run`
 ```bash
 uv run mi-unlock run --dry-run    # Test everything except the actual HTTP POST
 uv run mi-unlock run --plain      # Disable the live worker table; countdown always logs new lines
 uv run mi-unlock run --token-file /path/to/tokens.json
+uv run mi-unlock run --offsets-ms="1400,900,400,100"
 ```
+
+### Request timing and worker count
+
+`--offsets-ms` accepts comma-separated milliseconds **before** midnight Beijing.
+Each value creates one worker. The sign convention is:
+
+| Offset | Scheduled first request, Beijing time |
+|--------|--------------------------------------|
+| `500` | 23:59:59.500 (500ms **before** midnight) |
+| `0` | 00:00:00.000 |
+| `-500` | 00:00:00.500 (500ms **after** midnight) |
+
+For example, six workers, all before midnight:
+
+```bash
+uv run mi-unlock run --offsets-ms="2000,1400,900,500,250,100"
+```
+
+Or five workers spanning midnight:
+
+```bash
+uv run mi-unlock run --offsets-ms="1400,900,400,0,-500"
+```
+
+Offsets must be finite numbers, greater than `-30000` (the retry deadline)
+and less than `86400000` (24 hours before midnight). Decimal values are accepted.
+Workers alternate between the two configured tokens; additional workers do not
+require additional tokens. Each worker may retry, so the number of workers is
+not a limit on the total request count.
+
+The countdown runs independently and cannot hold up the workers. All workers
+use the same midnight target. Scheduling controls local request dispatch;
+OS scheduling and network latency affect the actual timing and server arrival.
+
+The same setting is available through `MI_UNLOCK_OFFSETS_MS`; an explicit
+`--offsets-ms` argument takes precedence. For the installed user service, use
+`systemctl --user edit xiaomi-unlock.service` and add:
+
+```ini
+[Service]
+Environment="MI_UNLOCK_OFFSETS_MS=1400,900,400,100"
+```
+
+After saving, apply the new setting:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user restart xiaomi-unlock.service
+journalctl --user -u xiaomi-unlock.service -n 30 --no-pager
+```
+
+Startup logs show the offsets, worker count and exact scheduled times. Updating
+the service environment does not change its daily start timer.
 
 ## Download (Pre-built Binaries)
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
+from collections.abc import Callable
+from contextlib import suppress
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -15,11 +17,13 @@ from .config import TokenError, load_tokens, setup_wizard
 from .core import (
     TIME_OFFSETS_MS,
     ApplyResult,
+    Clock,
     RealClock,
     StatusResult,
     check_status,
     run_workers,
     sync_ntp,
+    validate_offsets,
 )
 from .ui import (
     console,
@@ -38,8 +42,8 @@ from .ui import (
 def cli(ctx: click.Context) -> None:
     """🔓 Xiaomi Bootloader Unlock — AQLR method.
 
-    Sends 4 parallel HTTP requests to Xiaomi's unlock API at exactly
-    00:00 Beijing time (UTC+8) with staggered timing offsets.
+    Sends parallel HTTP requests to Xiaomi's unlock API around
+    00:00 Beijing time (UTC+8) with configurable timing offsets.
     """
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
@@ -93,6 +97,37 @@ def status(token_file: Path | None) -> None:
 
 
 # ── run ───────────────────────────────────────────────────────────────
+def parse_offsets_ms(ctx: click.Context, param: click.Parameter, value: str) -> list[float]:
+    """Parse and validate before loading credentials or making network requests."""
+    try:
+        offsets = [float(part.strip()) for part in value.split(",")]
+    except ValueError as exc:
+        raise click.BadParameter("Use comma-separated numbers, e.g. 1400,900,400,100", ctx, param) from exc
+    try:
+        validate_offsets(offsets)
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), ctx, param) from exc
+    return offsets
+
+
+async def run_scheduled(
+    tokens: tuple[str, str],
+    clock: Clock,
+    midnight: datetime,
+    offsets: list[float],
+    dry_run: bool = False,
+    on_attempt: Callable[[int, int, datetime], None] | None = None,
+) -> list[ApplyResult]:
+    """Arm workers immediately; the countdown is only an independent display."""
+    countdown = asyncio.create_task(countdown_display(midnight, clock.synced_now))
+    try:
+        return await run_workers(tokens, clock, offsets, dry_run, on_attempt, midnight=midnight)
+    finally:
+        countdown.cancel()
+        with suppress(asyncio.CancelledError):
+            await countdown
+
+
 @cli.command()
 @click.option(
     "--token-file",
@@ -102,11 +137,24 @@ def status(token_file: Path | None) -> None:
 )
 @click.option("--dry-run", is_flag=True, help="Skip actual HTTP POST (for testing)")
 @click.option(
+    "--offsets-ms",
+    default=",".join(f"{offset:g}" for offset in TIME_OFFSETS_MS),
+    envvar="MI_UNLOCK_OFFSETS_MS",
+    callback=parse_offsets_ms,
+    show_default=True,
+    show_envvar=True,
+    help=(
+        "Comma-separated milliseconds BEFORE midnight: 500 = 500 ms before; "
+        "-500 = 500 ms after; 0 = midnight. One worker per value. "
+        "Negative offsets must be greater than -30000 (the retry deadline)."
+    ),
+)
+@click.option(
     "--plain",
     is_flag=True,
     help="Disable the Rich Live worker table (countdown always logs new lines)",
 )
-def run(token_file: Path | None, dry_run: bool, plain: bool) -> None:
+def run(token_file: Path | None, dry_run: bool, offsets_ms: list[float], plain: bool) -> None:
     """Run the AQLR unlock attempt at next Beijing midnight."""
     print_header()
 
@@ -153,24 +201,31 @@ def run(token_file: Path | None, dry_run: bool, plain: bool) -> None:
     console.print("\n[bold]── Countdown ──[/bold]")
     console.print(f"  Target:  {midnight.strftime('%Y-%m-%d %H:%M:%S')} Beijing (UTC+8)")
     console.print(f"  Wait:    ~{h}h {m}m")
-    console.print(f"  Workers: 4 × offsets {TIME_OFFSETS_MS} ms")
+    worker_count = len(offsets_ms)
+    offsets_label = ", ".join(f"{offset:g}" for offset in offsets_ms)
+    console.print(f"  Workers: {worker_count} × offsets [{offsets_label}] ms", markup=False)
+    console.print("  Positive = before midnight; negative = after midnight")
+    for wid, offset in enumerate(offsets_ms, 1):
+        target = midnight - timedelta(milliseconds=offset)
+        console.print(f"  W{wid}: scheduled {target.isoformat(timespec='milliseconds')} Beijing")
 
-    if secs > 5:
-        asyncio.run(countdown_display(midnight, clock.synced_now))
+    # 5. Workers run alongside the countdown, using the same pinned midnight.
+    console.print("\n[bold]── Arming Workers ──[/bold]")
 
-    # 5. Workers
-    console.print("\n[bold]── Firing Workers ──[/bold]")
-
-    worker_statuses: dict[int, str] = {i: "waiting" for i in range(1, 5)}
+    worker_statuses: dict[int, str] = {i: "waiting" for i in range(1, worker_count + 1)}
     worker_attempts: dict[int, int] = {}
 
     def on_attempt(wid: int, attempt: int, fire_time: datetime) -> None:
         worker_statuses[wid] = "firing"
         worker_attempts[wid] = attempt
+        print(
+            f"{fire_time.isoformat(timespec='milliseconds')} Beijing | W{wid}: dispatching attempt {attempt}",
+            flush=True,
+        )
 
-    if not plain:
+    if not plain and console.is_terminal:
         with Live(
-            make_worker_table(4, TIME_OFFSETS_MS, worker_statuses, worker_attempts),
+            make_worker_table(worker_count, offsets_ms, worker_statuses, worker_attempts),
             console=console,
             refresh_per_second=4,
         ) as live:
@@ -178,12 +233,13 @@ def run(token_file: Path | None, dry_run: bool, plain: bool) -> None:
             async def _run_with_live() -> list[ApplyResult]:
                 def _on_attempt(wid: int, attempt: int, fire_time: datetime) -> None:
                     on_attempt(wid, attempt, fire_time)
-                    live.update(make_worker_table(4, TIME_OFFSETS_MS, worker_statuses, worker_attempts))
+                    live.update(make_worker_table(worker_count, offsets_ms, worker_statuses, worker_attempts))
 
-                return await run_workers(
+                return await run_scheduled(
                     (tokens.firefox, tokens.chrome),
                     clock,
-                    TIME_OFFSETS_MS,
+                    midnight,
+                    offsets_ms,
                     dry_run=dry_run,
                     on_attempt=_on_attempt,
                 )
@@ -198,13 +254,14 @@ def run(token_file: Path | None, dry_run: bool, plain: bool) -> None:
                 worker_statuses[r.worker_id] = "failed"
             else:
                 worker_statuses[r.worker_id] = "maybe"
-        console.print(make_worker_table(4, TIME_OFFSETS_MS, worker_statuses, worker_attempts))
+        console.print(make_worker_table(worker_count, offsets_ms, worker_statuses, worker_attempts))
     else:
         results = asyncio.run(
-            run_workers(
+            run_scheduled(
                 (tokens.firefox, tokens.chrome),
                 clock,
-                TIME_OFFSETS_MS,
+                midnight,
+                offsets_ms,
                 dry_run=dry_run,
                 on_attempt=on_attempt,
             )
